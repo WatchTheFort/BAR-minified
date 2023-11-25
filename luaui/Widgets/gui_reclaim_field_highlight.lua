@@ -531,8 +531,6 @@ local featureClusters = {}
 
 local E2M = 1 / 70 --solar ratio
 
-local featuresUpdated = false
-
 local function ProcessFeature(featureID)
 	local metal, _, energy = spGetFeatureResources(featureID)
 
@@ -556,41 +554,18 @@ local function ProcessFeature(featureID)
 		knownFeatures[featureID] = f
 
 		UpdateFeatureNeighborsMatrix(featureID, true, false, false)
-		featuresUpdated = true
 	end
 end
 
-local function UpdateFeatures(gf)
-	featuresUpdated = false
+local function UpdateFeatures()
 	clusterMetalUpdated = false
 
-	for _, fID in ipairs(spGetAllFeatures()) do
+	for _, fID in ipairs(knownFeatures) do
 		local metal, _, energy = spGetFeatureResources(fID)
 
 		if includeEnergy then metal = metal + energy * E2M end
 
-		if (not knownFeatures[fID]) and (metal >= minFeatureMetal) then
-			local f = {}
-
-			local fx, _, fz = spGetFeaturePosition(fID)
-			local fy = spGetGroundHeight(fx, fz)
-			f.x = fx
-			f.y = fy
-			f.z = fz
-
-			f.isGaia = (spGetFeatureTeam(fID) == gaiaTeamId)
-			f.height = spGetFeatureHeight(fID)
-			f.drawAlt = ((fy > 0 and fy) or 0) --+ f.height
-
-			f.metal = metal
-
-			knownFeatures[fID] = f
-
-			UpdateFeatureNeighborsMatrix(fID, true, false, false)
-			featuresUpdated = true
-		end
-
-		if knownFeatures[fID] then
+		if metal >= minFeatureMetal then
 			local fx, _, fz = spGetFeaturePosition(fID)
 			local fy = spGetGroundHeight(fx, fz)
 
@@ -602,7 +577,6 @@ local function UpdateFeatures(gf)
 				knownFeatures[fID].drawAlt = ((fy > 0 and fy) or 0) --+ knownFeatures[fID].height
 
 				UpdateFeatureNeighborsMatrix(fID, false, true, false)
-			    featuresUpdated = true
 			end
 
 			if knownFeatures[fID].metal ~= metal then
@@ -616,7 +590,6 @@ local function UpdateFeatures(gf)
 					else
 						UpdateFeatureNeighborsMatrix(fID, false, false, true)
 						knownFeatures[fID] = nil
-						featuresUpdated = true
 					end
 				end
 			end
@@ -628,10 +601,9 @@ local function UpdateFeatures(gf)
 			UpdateFeatureNeighborsMatrix(fID, false, false, true)
 			fInfo = nil
 			knownFeatures[fID] = nil
-			featuresUpdated = true
 		end
 
-		if fInfo and featuresUpdated then
+		if fInfo then
 			knownFeatures[fID].clID = nil
 		end
 	end
@@ -639,7 +611,6 @@ end
 
 local function ClusterizeFeatures()
 	local pointsTable = {}
-
 	local unclusteredPoints  = {}
 
 	for fID, fInfo in pairs(knownFeatures) do
@@ -739,16 +710,16 @@ local function ClustersToConvexHull()
 			}
 			--Spring.MarkerAddPoint(knownFeatures[fID].x, 0, knownFeatures[fID].z, string.format("%i(%i)", fc, fcm))
 		end
-		
+
 		--- TODO perform pruning as described in the article below, if convex hull algo will start to choke out
 		-- http://mindthenerd.blogspot.ru/2012/05/fastest-convex-hull-algorithm-ever.html
-		
+
 		local convexHull
 		if #clusterPoints >= 3 and lineCheck(clusterPoints) then
 			--spEcho("#clusterPoints >= 3")
 			--convexHull = ConvexHull.JarvisMarch(clusterPoints)
 			convexHull = MonotoneChain(clusterPoints) --twice faster
-		else 
+		else
 			--spEcho("not #clusterPoints >= 3")
 			local thisCluster = featureClusters[fc]
 
@@ -786,7 +757,7 @@ local function ClustersToConvexHull()
 			cz = cz + convexHullPoint.z
 			cy = max(cy, convexHullPoint.y)
 		end
-		
+
 		local totalArea = 0
 		local pt1 = convexHull[1]
 		for i = 2, #convexHull - 1 do
@@ -801,7 +772,7 @@ local function ClustersToConvexHull()
 			local triangleArea = sqrt(p * (p - a) * (p - b) * (p - c))
 			totalArea = totalArea + triangleArea
 		end
-		
+
 		convexHull.area = totalArea
 		convexHull.center = {x = cx/#convexHull, z = cz/#convexHull, y = cy + 1}
 
@@ -817,7 +788,7 @@ end
 
 function widget:Initialize()
 	screenx, screeny = widgetHandler:GetViewSizes()
-	
+
 	widgetHandler:AddAction("reclaim_highlight", enableHighlight, nil, "p")
 	widgetHandler:AddAction("reclaim_highlight", disableHighlight, nil, "r")
 
@@ -949,31 +920,27 @@ function widget:GameFrame(frame)
 		return
 	end
 
-	UpdateFeatures(frame)
+	UpdateFeatures()
+	ClusterizeFeatures()
+	ClustersToConvexHull()
 
-	if featuresUpdated then
-		ClusterizeFeatures()
-		ClustersToConvexHull()
+	if drawFeatureConvexHullSolidList then
+		glDeleteList(drawFeatureConvexHullSolidList)
+		drawFeatureConvexHullSolidList = nil
 	end
 
-	if featuresUpdated or drawFeatureConvexHullSolidList == nil then
-		if drawFeatureConvexHullSolidList then
-			glDeleteList(drawFeatureConvexHullSolidList)
-			drawFeatureConvexHullSolidList = nil
-		end
+	if drawFeatureConvexHullEdgeList then
+		glDeleteList(drawFeatureConvexHullEdgeList)
+		drawFeatureConvexHullEdgeList = nil
+	end
 
-		if drawFeatureConvexHullEdgeList then
-			glDeleteList(drawFeatureConvexHullEdgeList)
-			drawFeatureConvexHullEdgeList = nil
-		end
-
+	if drawFeatureConvexHullSolidList == nil then
 		drawFeatureConvexHullSolidList = glCreateList(DrawFeatureConvexHullSolid)
 		drawFeatureConvexHullEdgeList = glCreateList(DrawFeatureConvexHullEdge)
 	end
 
-
 	local camUpVectorCurrent = spGetCameraVectors().up
-	if textParametersChanged or featuresUpdated or drawFeatureClusterTextList == nil or camUpVectorCurrent ~= camUpVector then
+	if textParametersChanged or drawFeatureClusterTextList == nil or camUpVectorCurrent ~= camUpVector then
 		camUpVector = camUpVectorCurrent
 		if drawFeatureClusterTextList then
 			glDeleteList(drawFeatureClusterTextList)
